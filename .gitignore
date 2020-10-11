@@ -1,0 +1,10 @@
+build.bat
+config.json
+log.txt
+
+*.spec
+.idea/
+__pycache__
+build/
+dist/
+venv/

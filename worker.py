@@ -1,5 +1,4 @@
 import ctypes
-import datetime
 import logging
 from threading import Lock
 
@@ -7,6 +6,17 @@ OpenProcess = ctypes.windll.kernel32.OpenProcess
 ReadProcessMemory = ctypes.windll.kernel32.ReadProcessMemory
 
 mutex = Lock()
+
+
+class BranchItemInfo(ctypes.Structure):
+    _fields_ = [
+        ("unused0", ctypes.c_int),
+        ("branch_id", ctypes.c_int),
+        ("unused1", ctypes.c_byte * 14),
+        ("address", ctypes.c_int),
+        ("unused2", ctypes.c_int),
+        ("unused2", ctypes.c_int),
+    ]
 
 
 class Worker:
@@ -52,24 +62,28 @@ class Worker:
 
     def work(self) -> list:
         found_results = []
-
-        now = datetime.datetime.now()
-        self.say(f"Worker beginning scan of 0x{self.__chunk_start:08x} - 0x{self.__chunk_end:08x} at {now}")
-
         handle = OpenProcess(self.PROCESS_ALL_ACCESS, False, self.__pid)
-        for address in range(self.__chunk_start, self.__chunk_end, 4):
+
+        count = int((self.__chunk_end - self.__chunk_start) / 4 + 4)
+        branch_list_pointers = self.__read_array(handle, self.__module_base_address + self.__chunk_start, ctypes.c_int,
+                                                 count)
+
+        for index, branch_list_pointer in enumerate(branch_list_pointers):
             try:
-                branch_list_address = self.__read_ptr(self.__read_int, handle, self.__module_base_address + address,
-                                                      self.__MEMDATABASE_OFFSET)
+                if (branch_list_pointer == 0):
+                    continue
+
+                branch_list_address = self.__read_int(handle, branch_list_pointer + self.__MEMDATABASE_OFFSET)
 
                 if branch_list_address is None or branch_list_address == 0:
                     # Branch list is invalid, so all containing branches would also be invalid
                     continue
 
                 for branch in range(self.__LOWEST_BRANCH, self.__HIGHEST_BRANCH, 4):
-                    found = self.__scan_branch(handle, address, branch_list_address, branch)
+                    found = self.__scan_branch(handle, branch_list_address, branch)
 
                     if found:
+                        address = self.__chunk_start + index * ctypes.sizeof(ctypes.c_int)
                         self.say(f"Found potential match at 0x{address:08x}, branch 0x{branch:03x}")
                         found_results.append(address)
             except Exception as e:
@@ -103,6 +117,18 @@ class Worker:
 
         return (int)(buffer.value)
 
+    def __read_array(self, handle: int, address: int, type, count: int):
+        buffer = (type * count)()
+        bytes_read = ctypes.c_ulonglong(0)
+        result = ReadProcessMemory(handle, address, buffer, ctypes.sizeof(buffer), ctypes.byref(bytes_read))
+        if result == 0:
+            return None
+
+        if bytes_read.value != ctypes.sizeof(buffer):
+            return None
+
+        return buffer
+
     def __read_string(self, handle: int, address: int, max_length: int = 255) -> None or bytes:
         buffer = ctypes.create_string_buffer(max_length)
         result = ReadProcessMemory(handle, address, ctypes.byref(buffer), max_length, None)
@@ -111,40 +137,36 @@ class Worker:
 
         return buffer.value
 
-    def __scan_branch(self, handle: int, base_address: int, branch_list_address: int, branch: int) -> bool:
+    def __scan_branch(self, handle: int, branch_list_address: int, branch: int) -> bool:
         branch_address = self.__read_int(handle, branch_list_address + branch)
         if branch_address is None or branch_address == 0 or branch_address == 0xffffffff:
             return False
 
-        for i in range(self.__BRANCH_SIZE):
-            branch_item_offset = i * self.__BRANCH_INFO_SIZE
-            itemset_id = self.__read_int(handle, branch_address + branch_item_offset + self.__BRANCH_ITEMSET_ID)
+        branch_item_infos = self.__read_array(handle, branch_address, BranchItemInfo, self.__BRANCH_SIZE)
+        if branch_item_infos is None:
+            return False
 
-            if itemset_id != i:
-                # If we read an itemset_id that's different from our expected outcome (i), then this doesn't appear
-                # valid. Exit early
+        for index, branch_item_info in enumerate(branch_item_infos):
+            if branch_item_info.branch_id != index:
+                # If we read an branch ID that's different from our expected outcome (index),
+                # then this doesn't appear valid. Exit early
                 continue
 
-            item_address = self.__read_int(handle, branch_address + branch_item_offset + self.__BRANCH_ITEMSET_ADDRESS)
-            if item_address is None or item_address == 0:
+            if branch_item_info.address is None or branch_item_info.address == 0:
                 continue
 
             # Item ID mismatch
-            item_id = self.__read_int(handle, item_address)
+            item_id = self.__read_int(handle, branch_item_info.address)
             if item_id is None or item_id != self.__item_id:
                 continue
 
-            self.say(f"Potential hit: 0x{base_address:08x}")
-
             # Check whether the name appears to match or not
-            name_address = self.__read_int(handle, item_address + self.__BRANCH_ITEM_NAME_OFFSET)
+            name_address = self.__read_int(handle, branch_item_info.address + self.__BRANCH_ITEM_NAME_OFFSET)
             item_name = self.__read_string(handle, name_address)
             if item_name is None:
                 continue
 
             item_name = item_name.decode('utf-8')
-            self.say(f"Item at 0x{name_address:08x} => {item_id} {item_name}")
-
             if item_name in self.__item_name:
                 return True
 

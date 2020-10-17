@@ -1,3 +1,4 @@
+import argparse
 import concurrent.futures
 import json
 import logging
@@ -31,6 +32,13 @@ fileHandler.setFormatter(formatter)
 __logger.addHandler(fileHandler)
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description='Brute force search for memdatabase base address')
+    parser.add_argument('--first-only', action='store_true', default=False,
+                        help='Stop and return the first result immediately as soon as it is found.')
+
+    options = parser.parse_args()
+
     debug_set = set_privilege("SeDebugPrivilege")
     print("Debug privileges set:", debug_set)
     if not debug_set:
@@ -121,14 +129,15 @@ if __name__ == "__main__":
                 chunk_start = item
                 chunk_end = item + chunk_size - 4
 
-                worker = Worker(pid, module_base_address, chunk_start, chunk_end, item_id, item_name)
+                worker = Worker(options, pid, module_base_address, chunk_start, chunk_end, item_id, item_name)
                 future = executor.submit(worker.work)
                 futures.append(future)
 
-            for future in futures:
+            for future in concurrent.futures.as_completed(futures):
                 all_results.extend(future.result())
 
-        result_count = len(all_results)
+                if options.first_only:
+                    break
 
         for address in all_results:
             msg = f"Found address 0x{address:08x}"

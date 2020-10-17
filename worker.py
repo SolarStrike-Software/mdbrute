@@ -1,3 +1,4 @@
+import argparse
 import ctypes
 import logging
 from threading import Lock
@@ -33,6 +34,7 @@ class Worker:
 
     PROCESS_ALL_ACCESS = (0x000F0000 | 0x00100000 | 0xFFF)
 
+    __options: argparse.Namespace
     __pid: int
     __chunk_start: int
     __chunk_end: int
@@ -40,8 +42,10 @@ class Worker:
     __item_name: str
     __module_base_address: int
 
-    def __init__(self, pid: int, module_base_address: int, chunk_start: int, chunk_end: int, item_id: int,
+    def __init__(self, options: argparse.Namespace, pid: int, module_base_address: int, chunk_start: int,
+                 chunk_end: int, item_id: int,
                  item_name):
+        self.__options = options
         self.__pid = pid
         self.__module_base_address = module_base_address
         self.__chunk_start = chunk_start
@@ -86,6 +90,9 @@ class Worker:
                         address = self.__chunk_start + index * ctypes.sizeof(ctypes.c_int)
                         self.say(f"Found potential match at 0x{address:08x}, branch 0x{branch:03x}")
                         found_results.append(address)
+
+                        if self.__options.first_only:
+                            return found_results
             except Exception as e:
                 mutex.acquire()
                 try:

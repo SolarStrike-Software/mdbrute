@@ -101,7 +101,7 @@ if __name__ == "__main__":
         end_address = int(get_config('end_address', DEFAULT_END_ADDRESS), 0)
 
         if workers <= 0 or workers > 128:
-            msg = "Error: Config 'workers' must be between 1 and 128.";
+            msg = "Error: Config 'workers' must be between 1 and 128."
             logging.getLogger().error(msg)
             print(msg)
             exit(-1)
@@ -134,9 +134,10 @@ if __name__ == "__main__":
                 futures.append(future)
 
             for future in concurrent.futures.as_completed(futures):
-                all_results.extend(future.result())
+                result = future.result()
+                all_results.extend(result)
 
-                if options.first_only:
+                if len(result) > 1 and options.first_only:
                     break
 
         for address in all_results:
@@ -147,5 +148,3 @@ if __name__ == "__main__":
     except Exception as e:
         logging.getLogger().exception(e, exc_info=True)
         raise e
-
-    exit(0)
